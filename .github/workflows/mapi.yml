@@ -1,0 +1,84 @@
+name: 'Mayhem for API'
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    # Create environment to run API
+    - name: Build the wildfly image
+      run: |
+          cd server
+          docker build -t keycloak-wildfly .
+
+    # Run API in dev mode
+    - name: Run API
+      run: |
+          docker run -p 8080:8080 \
+            -v $(pwd)/.github/test-fixtures/test-realm.json:/realms/test-realm.json \
+            -e KEYCLOAK_USER=admin \
+            -e KEYCLOAK_PASSWORD=admin \
+            -e KEYCLOAK_IMPORT=/realms/test-realm.json \
+            keycloak-wildfly \
+            --debug & \
+            timeout 60 bash -c 'until curl --fail localhost:8080; do sleep 2; done'
+
+    # Get Bearer Token
+    - name: Get Token
+      run: |
+        token=$( curl -X POST \
+          -H 'Content-Type: application/x-www-form-urlencoded' \
+          -d 'username=admin&password=admin&client_id=admin-cli&grant_type=password' \
+          http://localhost:8080/auth/realms/master/protocol/openid-connect/token | jq -j ".access_token")
+        echo "AUTH_TOKEN=$token" >> "$GITHUB_ENV"
+
+    # Run Mayhem for API
+    - name: Run Mayhem for API to check for vulnerabilities
+      uses: ForAllSecure/mapi-action@v1
+      continue-on-error: true
+      with:
+        mapi-token: ${{ secrets.MAPI_TOKEN }}
+        api-url: http://localhost:8080/auth/admin/realms
+        api-spec: .github/api/openapi_16.0.yml
+        target: forallsecure/keycloak-wildfly
+        duration: 1min
+        sarif-report: mapi.sarif
+        html-report: mapi.html
+        #
+        # Keycloak REST APIs are generated from HTML and then manually
+        # adjusted for each version. This means that the specification
+        # will not be as accurate as one generated from source or maintained
+        # by hand. The InvalidResponseSpec rule is ignored in order to
+        # reduce the number of warnings raised against this generated
+        # specification.
+        #
+        # https://github.com/ccouzens/keycloak-openapi
+        #
+        run-args: |
+          --concurrency
+          4
+          --header-auth
+          Authorization:Bearer ${{ env.AUTH_TOKEN }}
+          --ignore-rule
+          InvalidResponseSpec
+          --ignore-endpoint
+          .*logout.*
+
+    # Archive HTML report
+    - name: Archive Mayhem for API report
+      uses: actions/upload-artifact@v2
+      with:
+        name: mapi-report
+        path: mapi.html
+
+    # Upload SARIF file (only available on public repos or github enterprise)
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v1
+      with:
+        sarif_file: mapi.sarif

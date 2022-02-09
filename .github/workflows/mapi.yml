@@ -46,7 +46,7 @@ jobs:
         mapi-token: ${{ secrets.MAPI_TOKEN }}
         api-url: http://localhost:8080/auth/admin/realms
         api-spec: .github/api/openapi_16.0.yml
-        target: forallsecure/keycloak-wildfly
+        target: makesoftwaresafe/keycloak-wildfly
         duration: 1min
         sarif-report: mapi.sarif
         html-report: mapi.html
